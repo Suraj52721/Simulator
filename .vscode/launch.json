@@ -1,0 +1,28 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Backend (Flask)",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/backend/app.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "Frontend (Flutter)",
+            "request": "launch",
+            "type": "dart",
+            "program": "quantum_simulator_app/lib/main.dart"
+        }
+    ],
+    "compounds": [
+        {
+            "name": "Full Simulator",
+            "configurations": [
+                "Backend (Flask)",
+                "Frontend (Flutter)"
+            ]
+        }
+    ]
+}
