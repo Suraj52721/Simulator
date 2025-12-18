@@ -73,6 +73,8 @@ def simulate():
                     circuit.cx(op['control'], op['target'])
                 elif gate_type == 'cz':
                     circuit.cz(op['control'], op['target'])
+                elif gate_type == 'cp':
+                    circuit.cp(op['control'], op['target'], op.get('theta', 0.0))
                 elif gate_type == 'swap':
                     circuit.swap(op['qubit1'], op['qubit2'])
                 elif gate_type == 'measure':

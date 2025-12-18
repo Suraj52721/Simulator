@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../models/circuit.dart';
+import '../models/gate.dart'; // Added import
 
 class GateTile extends StatelessWidget {
   final GateType type;
@@ -20,6 +20,17 @@ class GateTile extends StatelessWidget {
   Widget _buildBox(BuildContext context, {bool isFeedback = false}) {
     Color color;
     String label = type.name.toUpperCase();
+
+    // Handle specific label overrides
+    switch (type) {
+      case GateType.phase:
+      case GateType.cp:
+        label = "PHASE";
+        break;
+      default:
+        // Default label is already type.name.toUpperCase()
+        break;
+    }
 
     switch (type) {
       case GateType.h:
@@ -45,6 +56,7 @@ class GateTile extends StatelessWidget {
       case GateType.ry:
       case GateType.rz:
       case GateType.phase:
+      case GateType.cp:
         color = Colors.pinkAccent;
         break;
       case GateType.s:

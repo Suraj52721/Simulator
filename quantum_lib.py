@@ -313,6 +313,31 @@ class Operator:
                 result = result.tensor(Operator(Operator.identity))
         return result
 
+
+    @staticmethod
+    def cp(control, target, theta, no_of_qubits):
+        """
+        Controlled-Phase Gate.
+        Applies Phase(theta) to target if control is |1>.
+        Corresponds to diag(1, 1, 1, e^i*theta) in standard basis.
+        """
+        if control < 0 or control >= no_of_qubits or target < 0 or target >= no_of_qubits:
+            raise ValueError("Qubit indices out of range.")
+        if control == target:
+            raise ValueError("Control and target must be different.")
+        
+        dim = 2 ** no_of_qubits
+        cp_matrix = np.eye(dim, dtype=complex)
+        
+        for i in range(dim):
+             # Format to binary string. Index 0 of string corresponds to MSB?
+             # cnot implementation uses bits[no_of_qubits - 1 - control]
+             binary = format(i, f'0{no_of_qubits}b')
+             if binary[no_of_qubits - 1 - control] == '1' and binary[no_of_qubits - 1 - target] == '1':
+                  cp_matrix[i, i] = np.exp(1j * theta)
+        
+        return Operator(cp_matrix)
+
     @staticmethod
     def t_gate(qubit, no_of_qubits):
         return Operator.phase(qubit, np.pi / 4, no_of_qubits)
@@ -636,6 +661,12 @@ class QuantumCircuit:
         
     def cz(self, control, target):
         self.operations.append(('cz', control, target))
+
+    def cp(self, control, target, theta):
+        self.operations.append(('cp', control, target, theta))
+
+    def cp(self, control, target, theta):
+        self.operations.append(('cp', control, target, theta))
         
     def swap(self, qubit1, qubit2):
         self.operations.append(('swap', qubit1, qubit2))
@@ -645,63 +676,178 @@ class QuantumCircuit:
         Measure qubit and store in classical bit cbit.
         """
         self.measurements.append((qubit, cbit))
+        self.operations.append(('measure', qubit, cbit))
+
 
 class Simulator:
     def __init__(self):
         pass
 
     def run(self, circuit, shots=1024):
-        final_state = self._simulate_state(circuit)
-        
-        # If there are measurements, simulate sampling
-        if not circuit.measurements:
+        # Check if we need Monte Carlo simulation (intermediate measurements)
+        # We look for 'measure' operations in the circuit
+        has_measure_ops = any(op[0] == 'measure' for op in circuit.operations)
+
+        if not has_measure_ops and not circuit.measurements:
+            # No measurements at all
+            final_state = self._simulate_state(circuit)
             return {'statevector': final_state}
-            
-        # Calculate probabilities for all basis states
-        probs = np.abs(final_state.coef.flatten())**2
+
+        # If we have measure ops, we MUST do shot-based simulation because
+        # the state collapses differently each time.
+        # Even if we don't have explicit measure ops but have measurements list
+        # (old style or implicit at end), the old logic worked. 
+        # But to be consistent with "Collapse" behavior, let's use the new engine 
+        # if there are ANY explicit measure instructions in the operations list.
         
-        # Normalize probabilities (to handle potential numerical errors)
-        probs /= np.sum(probs)
-        
-        n = circuit.num_qubits
-        basis_states = [format(i, f'0{n}b') for i in range(2**n)]
-        
-        # Sample
-        measurements = np.random.choice(basis_states, size=shots, p=probs)
-        
-        counts = {}
-        for sample in measurements:
-            # sample is string like '010' (q0, q1, q2)
-            # We need to construct the classical register string
-            if not circuit.measurements:
-                continue
+        if has_measure_ops:
+            counts = {}
+            for _ in range(shots):
+                # Run single shot
+                _, measured_bits = self._simulate_shot(circuit)
                 
-            max_cbit = max(cbit for _, cbit in circuit.measurements)
-            c_reg = ['0'] * (max_cbit + 1)
+                # measured_bits is a dict {cbit: val}
+                # We need to construct the bitstring
+                if not measured_bits:
+                    continue
+                
+                # Determine max cbit index
+                max_cbit = 0
+                if circuit.measurements:
+                     max_cbit = max(c for _, c in circuit.measurements)
+                
+                # Also check dynamic measurements from simulation
+                if measured_bits:
+                    max_cbit = max(max_cbit, max(measured_bits.keys()))
+
+                # Create bitstring c[n]...c[0]
+                c_reg = ['0'] * (max_cbit + 1)
+                for c_idx, val in measured_bits.items():
+                    c_reg[c_idx] = str(val)
+                
+                c_result = "".join(reversed(c_reg))
+                counts[c_result] = counts.get(c_result, 0) + 1
             
-            for q_idx, c_idx in circuit.measurements:
-                # Assuming standard ordering where q0 is the LSB in the binary string representation
-                val = sample[n - 1 - q_idx]
-                c_reg[c_idx] = val
+            return counts
+        
+        else:
+            # Optimization: Use Statevector sampling if NO intermediate collapse is needed
+            # This is the old "Deffered Measurement" style (faster)
+            final_state = self._simulate_state(circuit)
             
-            c_result = "".join(reversed(c_reg)) # Standard convention: c[n]...c[0]
-            counts[c_result] = counts.get(c_result, 0) + 1
+            # Calculate probabilities for all basis states
+            probs = np.abs(final_state.coef.flatten())**2
+            probs /= np.sum(probs) # Normalize
             
-        return counts
+            n = circuit.num_qubits
+            basis_states = [format(i, f'0{n}b') for i in range(2**n)]
+            
+            measurements = np.random.choice(basis_states, size=shots, p=probs)
+            
+            counts = {}
+            for sample in measurements:
+                # sample is string like '010' (q0, q1, q2)
+                if not circuit.measurements:
+                    continue
+                    
+                max_cbit = max(cbit for _, cbit in circuit.measurements)
+                c_reg = ['0'] * (max_cbit + 1)
+                
+                for q_idx, c_idx in circuit.measurements:
+                    val = sample[n - 1 - q_idx]
+                    c_reg[c_idx] = val
+                
+                c_result = "".join(reversed(c_reg))
+                counts[c_result] = counts.get(c_result, 0) + 1
+                
+            return counts
 
     def _simulate_state(self, circuit):
+        """
+        Original simulator for pure states (no intermediate collapse).
+        Ignores 'measure' operations to prevent crash, effectively treating them as Identity
+        if this method is called directly (though .run() guards against this).
+        """
+        state, _ = self._simulate_shot(circuit, force_pure=True)
+        return state
+
+    def _simulate_shot(self, circuit, force_pure=False):
+        """
+        Simulates a single shot of the circuit.
+        current_state evolves.
+        Returns (final_state, measured_values_dict)
+        """
         n = circuit.num_qubits
-        # Start with |0...0>
-        # |0> is [1, 0]
         state = Ket([1, 0])
         for _ in range(n - 1):
             state = state.tensor(Ket([1, 0]))
             
-        # Apply operations
+        measured_values = {}
+            
         for op in circuit.operations:
             gate_name = op[0]
             
-            if gate_name == 'h':
+            if gate_name == 'measure':
+                if force_pure:
+                    continue # Treat as Identity in pure mode
+                
+                qubit = op[1]
+                cbit = op[2]
+                
+                # Projective Measurement
+                # 1. Calculate P(0) and P(1)
+                # We need projectors P0 and P1 for the specific qubit
+                # P0 = |0><0|, P1 = |1><1|
+                
+                # Construct big Projectors M0 and M1
+                # This is expensive O(2^N). Optimized way:
+                # Calculate marginal probability.
+                # Or just matrix multiply since N is small (<15).
+                
+                p0_matrix = np.array([[1, 0], [0, 0]], dtype=complex)
+                p1_matrix = np.array([[0, 0], [0, 1]], dtype=complex)
+                
+                # Tensor them up
+                # LSB ordering: qubit 0 is last in tensor
+                M0 = Operator([[1]])
+                M1 = Operator([[1]])
+                
+                for i in range(n):
+                    if i == (n - 1 - qubit):
+                        M0 = M0.tensor(Operator(p0_matrix))
+                        M1 = M1.tensor(Operator(p1_matrix))
+                    else:
+                        M0 = M0.tensor(Operator(Operator.identity))
+                        M1 = M1.tensor(Operator(Operator.identity))
+                        
+                # Probabilities
+                # <psi|M0|psi>
+                # M0 is projection, M0*M0 = M0, Hermitian
+                psi_vec = state.coef
+                
+                # M0|psi>
+                proj0_vec = M0.matrix @ psi_vec
+                prob0 = np.real(np.vdot(psi_vec, proj0_vec)) # vdot handles complex conjugate
+                
+                # Decide outcome
+                r = np.random.random()
+                
+                if r < prob0:
+                    outcome = 0
+                    # Collapse to projected state and normalize
+                    new_vec = proj0_vec / np.sqrt(prob0)
+                    state = Ket(new_vec)
+                else:
+                    outcome = 1
+                    prob1 = 1.0 - prob0
+                    # M1|psi>
+                    proj1_vec = M1.matrix @ psi_vec
+                    new_vec = proj1_vec / np.sqrt(prob1)
+                    state = Ket(new_vec)
+                    
+                measured_values[cbit] = outcome
+                
+            elif gate_name == 'h':
                 # Use manual H construction with LSB ordering
                 H = (1 / np.sqrt(2)) * np.array([[1, 1], [1, -1]], dtype=complex)
                 gate = self._single_qubit_gate(H, op[1], n)
@@ -733,6 +879,13 @@ class Simulator:
             elif gate_name == 'cz':
                 gate = Operator.cz(op[1], op[2], n)
                 state = gate.op(state)
+            elif gate_name == 'cp':
+                gate = Operator.cp(op[1], op[2], op[3], n)
+                state = gate.op(state)
+            elif gate_name == 'cp':
+                # ('cp', control, target, theta)
+                gate = Operator.cp(op[1], op[2], op[3], n)
+                state = gate.op(state)
             elif gate_name == 'swap':
                 gate = Operator.swap(op[1], op[2], n)
                 state = gate.op(state)
@@ -752,7 +905,7 @@ class Simulator:
                 gate = Operator.rz(op[1], op[2], n)
                 state = gate.op(state)
                 
-        return state
+        return state, measured_values
 
     def _single_qubit_gate(self, matrix, qubit, no_of_qubits):
         result = Operator([[1]])

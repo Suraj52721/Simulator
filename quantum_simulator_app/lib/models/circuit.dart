@@ -1,68 +1,8 @@
 import 'package:flutter/foundation.dart';
-
-enum GateType {
-  h,
-  x,
-  y,
-  z,
-  cx,
-  cz,
-  swap,
-  phase,
-  t,
-  s,
-  rx,
-  ry,
-  rz,
-  measure,
-  custom,
-}
-
-class QuantumGate {
-  final String id;
-  final GateType type;
-  final int targetQubit;
-  final int? controlQubit; // For CX, CZ
-  final double? parameter; // For Phase, Rx, Ry, Rz
-  final List<List<double>>? matrix; // For Custom Gates
-
-  QuantumGate({
-    required this.id,
-    required this.type,
-    required this.targetQubit,
-    this.controlQubit,
-    this.parameter,
-    this.matrix,
-  });
-
-  Map<String, dynamic> toJson() {
-    final Map<String, dynamic> data = {'type': type.name.toUpperCase()};
-
-    // Backend mapping
-    data['type'] = type.name;
-
-    if (type == GateType.cx || type == GateType.cz) {
-      data['control'] = controlQubit;
-      data['target'] = targetQubit;
-    } else if (type == GateType.swap) {
-      data['qubit1'] = controlQubit; // Swap uses two qubits, reusing fields
-      data['qubit2'] = targetQubit;
-    } else if (type == GateType.measure) {
-      // Backend expects 'qubit'
-      data['qubit'] = targetQubit;
-      // Optional: data['cbit'] = targetQubit; (default behavior in backend)
-    } else {
-      data['qubit'] = targetQubit;
-      if (parameter != null) {
-        data['theta'] = parameter;
-      }
-      if (type == GateType.custom && matrix != null) {
-        data['matrix'] = matrix;
-      }
-    }
-    return data;
-  }
-}
+import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:convert';
+import 'gate.dart';
+import 'preset.dart';
 
 class CircuitState extends ChangeNotifier {
   int numQubits = 3;
@@ -122,6 +62,12 @@ class CircuitState extends ChangeNotifier {
             } else {
               buffer.writeln("CUSTOM ${gate.id} $q");
             }
+          } else if (gate.type == GateType.cz) {
+            buffer.writeln("CZ ${gate.controlQubit} ${gate.targetQubit}");
+          } else if (gate.type == GateType.cp) {
+            buffer.writeln(
+              "CP ${gate.controlQubit} ${gate.targetQubit} ${gate.parameter ?? 0.0}",
+            );
           } else if (gate.type == GateType.swap) {
             buffer.writeln("SWAP ${gate.controlQubit} ${gate.targetQubit}");
           }
@@ -359,9 +305,21 @@ class CircuitState extends ChangeNotifier {
             q2,
             step,
           );
-          // Also make sure to show it on q1 visually?
-          // Currently visualizer handles control/swap gates via painter,
-          // but `placeGate` only stores at target.
+        } else if (cmd == 'cp') {
+          int ctrl = int.parse(parts[1]);
+          int trgt = int.parse(parts[2]);
+          double theta = double.parse(parts[3]);
+          placeGate(
+            QuantumGate(
+              id: "CP",
+              type: GateType.cp,
+              targetQubit: trgt,
+              controlQubit: ctrl,
+              parameter: theta,
+            ),
+            trgt,
+            step,
+          );
         }
         step++;
       }
@@ -369,4 +327,154 @@ class CircuitState extends ChangeNotifier {
       setError("Parse Error: $e");
     }
   }
+
+  // --- PRESETS & PERSISTENCE ---
+
+  List<Preset> _customPresets = [];
+  List<Preset> get allPresets => [...Preset.builtins, ..._customPresets];
+
+  CircuitState() {
+    _init();
+  }
+
+  Future<void> _init() async {
+    await _loadCustomPresets();
+  }
+
+  Future<void> _loadCustomPresets() async {
+    final prefs = await SharedPreferences.getInstance();
+    final List<String>? saved = prefs.getStringList('custom_presets');
+    if (saved != null) {
+      _customPresets = saved.map((jsonStr) {
+        final Map<String, dynamic> map = jsonDecode(jsonStr);
+        return Preset(
+          name: map['name'],
+          id: map['id'],
+          generator: (n) {
+            final List<dynamic> gateList = map['gates'];
+            return gateList
+                .map((gJson) => QuantumGate.fromJson(gJson))
+                .toList();
+          },
+        );
+      }).toList();
+      notifyListeners();
+    }
+  }
+
+  Future<void> saveCustomPreset(String name) async {
+    final prefs = await SharedPreferences.getInstance();
+
+    // 1. Capture current gates
+    List<QuantumGate> currentGates = [];
+    int maxStep = 0;
+    _grid.values.forEach((map) {
+      if (map.keys.isNotEmpty) {
+        int m = map.keys.reduce((a, b) => a > b ? a : b);
+        if (m > maxStep) maxStep = m;
+      }
+    });
+
+    for (int step = 0; step <= maxStep; step++) {
+      for (int q = 0; q < numQubits; q++) {
+        final gate = getGateAt(q, step);
+        if (gate != null) {
+          // We need to preserve the step information implicitly by order?
+          // Or explicitly?
+          // The generator returns a List<QuantumGate>.
+          // If we just return a list, how does `loadPreset` know where to put them?
+          // `loadPreset` below will likely just place them sequentially or use their original positions if stored.
+          // BUT `QuantumGate` doesn't store 'step'.
+          // Limitation: Our simple Preset system assumes generated gates are placed sequentially or logic dictates placement.
+          // For Custom Presets, we want to SAVE the exact circuit.
+          // So we should serialize the GRID structure or easier:
+          // Just serialize the list of gates, but we lose 'empty steps'.
+          // If we want exact replica, we need "step" in QuantumGate or wrapper.
+          // Let's hack: The Preset Generator for custom presets will return gates with "targetQubit" preserved.
+          // But "step"?
+          // Let's rely on the fact that `loadPreset` will try to place them.
+          // If `loadPreset` places them sequentially, we lose specific timing.
+          // For now, let's just save the gates and place them sequentially.
+          currentGates.add(gate);
+        }
+      }
+    }
+
+    final newPreset = Preset(
+      name: name,
+      id: "custom_${DateTime.now().millisecondsSinceEpoch}",
+      generator: (n) => currentGates, // Closure captures currentGates
+    );
+
+    _customPresets.add(newPreset);
+
+    // Persist
+    List<String> toSave = _customPresets.map((p) {
+      // We need to serialize the generator result (the gates)
+      // We assume custom presets don't depend on 'n' dynamically in the closure
+      // (they are static snapshots).
+      final gates = p.generator(0); // n doesn't matter for specific snapshot
+      Map<String, dynamic> data = {
+        'name': p.name,
+        'id': p.id,
+        'gates': gates.map((g) => g.toJson()).toList(),
+      };
+      return jsonEncode(data);
+    }).toList();
+
+    await prefs.setStringList('custom_presets', toSave);
+    notifyListeners();
+  }
+
+  void loadPreset(Preset preset) {
+    clear();
+    // Dynamic adjustment?
+    // If preset is "QFT", it uses current numQubits.
+    // If preset is "Custom", it has fixed gates.
+    // We should probably check if custom preset qubits > current numQubits?
+    // For now, just try to place.
+
+    List<QuantumGate> gates = preset.generator(numQubits);
+
+    // Crude placement logic:
+    // If gates collide on a qubit, move to next step.
+    // This is "ASAP" scheduling.
+
+    // helper to track used steps per qubit
+    Map<int, int> qubitNextStep = {};
+    for (int i = 0; i < numQubits; i++) qubitNextStep[i] = 0;
+
+    for (final gate in gates) {
+      if (gate.targetQubit >= numQubits) {
+        // Skip gates that don't fit
+        continue;
+      }
+
+      int bestStep = qubitNextStep[gate.targetQubit]!;
+
+      if (gate.type == GateType.cx ||
+          gate.type == GateType.cz ||
+          gate.type == GateType.swap ||
+          gate.type == GateType.cp) {
+        int control = gate.controlQubit!;
+        if (control >= numQubits) continue;
+
+        bestStep = max(bestStep, qubitNextStep[control]!);
+      }
+
+      placeGate(gate, gate.targetQubit, bestStep);
+
+      qubitNextStep[gate.targetQubit] = bestStep + 1;
+      if (gate.type == GateType.cx ||
+          gate.type == GateType.cz ||
+          gate.type == GateType.swap ||
+          gate.type == GateType.cp) {
+        qubitNextStep[gate.controlQubit!] = bestStep + 1;
+      }
+    }
+    notifyListeners();
+  }
+
+  // Helper for max
+  int max(int a, int b) => a > b ? a : b;
 }

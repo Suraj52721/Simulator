@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../models/circuit.dart';
 import 'gate_tile.dart';
+import '../models/gate.dart'; // Added import
 import '../dialogs/cnot_dialog.dart';
 import '../dialogs/parameter_dialog.dart';
 
@@ -104,12 +105,20 @@ class CircuitGrid extends StatelessWidget {
                 id: DateTime.now().toIso8601String(),
                 type: type,
                 targetQubit: qIndex,
-                controlQubit: (type == GateType.cx || type == GateType.cz)
+                controlQubit:
+                    (type == GateType.cx ||
+                        type == GateType.cz ||
+                        type == GateType.cp)
                     ? (qIndex > 0 ? qIndex - 1 : qIndex + 1)
                     : null,
+                parameter: (type == GateType.cp)
+                    ? 1.5708
+                    : null, // Default pi/2 for CP
               );
 
-              if (type == GateType.cx || type == GateType.cz) {
+              if (type == GateType.cx ||
+                  type == GateType.cz ||
+                  type == GateType.cp) {
                 int control = qIndex == 0 ? 1 : qIndex - 1;
                 context.read<CircuitState>().placeGate(
                   QuantumGate(
@@ -136,8 +145,9 @@ class CircuitGrid extends StatelessWidget {
                       onTap: () async {
                         if (gate.type == GateType.cx ||
                             gate.type == GateType.cz ||
-                            gate.type == GateType.swap) {
-                          // CNOT / CZ / SWAP Dialog
+                            gate.type == GateType.swap ||
+                            gate.type == GateType.cp) {
+                          // CNOT / CZ / SWAP / CP Dialog
                           final result = await showDialog<Map<String, int>>(
                             context: context,
                             builder: (ctx) => CnotDialog(
@@ -257,7 +267,9 @@ class CircuitPainter extends CustomPainter {
         if (gate != null) {
           if (gate.type == GateType.cx ||
               gate.type == GateType.cz ||
-              gate.type == GateType.swap) {
+              gate.type == GateType.swap ||
+              gate.type == GateType.cp ||
+              gate.type == GateType.phase) {
             final control = gate.controlQubit;
             final target = gate.targetQubit;
 

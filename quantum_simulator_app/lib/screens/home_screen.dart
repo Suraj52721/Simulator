@@ -1,15 +1,24 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../models/circuit.dart';
+import '../models/gate.dart'; // Added import
 import '../services/api_service.dart';
 import '../widgets/circuit_grid.dart';
 import '../widgets/gate_tile.dart';
 import '../widgets/results_section.dart';
 import '../widgets/code_editor.dart';
 import '../dialogs/custom_gate_dialog.dart';
+import '../models/preset.dart'; // Added import
 
-class HomeScreen extends StatelessWidget {
+class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
+
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  bool _singleShot = false;
 
   @override
   Widget build(BuildContext context) {
@@ -49,6 +58,7 @@ class HomeScreen extends StatelessWidget {
                         GateType.ry,
                         GateType.rz,
                         GateType.phase,
+                        GateType.cp, // Added CP
                         GateType.s,
                         GateType.t,
                         GateType.measure,
@@ -106,6 +116,133 @@ class HomeScreen extends StatelessWidget {
                         onPressed: () =>
                             context.read<CircuitState>().addQubit(),
                       ),
+                      const SizedBox(width: 16),
+                      // Presets Dropdown (Moved here)
+                      PopupMenuButton<Preset?>(
+                        tooltip: "Presets",
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 8,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.white10,
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: Colors.white24),
+                          ),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.playlist_play,
+                                size: 20,
+                                color: Colors.white70,
+                              ),
+                              SizedBox(width: 8),
+                              Text(
+                                "Presets",
+                                style: TextStyle(color: Colors.white),
+                              ),
+                              Icon(
+                                Icons.arrow_drop_down,
+                                color: Colors.white54,
+                              ),
+                            ],
+                          ),
+                        ),
+                        onSelected: (preset) {
+                          if (preset != null) {
+                            context.read<CircuitState>().loadPreset(preset);
+                          }
+                        },
+                        itemBuilder: (context) {
+                          final presets = context
+                              .read<CircuitState>()
+                              .allPresets;
+                          return [
+                            ...presets.map(
+                              (p) =>
+                                  PopupMenuItem(value: p, child: Text(p.name)),
+                            ),
+                            const PopupMenuDivider(),
+                            PopupMenuItem(
+                              value: null,
+                              onTap: () {
+                                WidgetsBinding.instance.addPostFrameCallback((
+                                  _,
+                                ) async {
+                                  final name = await showDialog<String>(
+                                    context: context,
+                                    builder: (ctx) {
+                                      final controller =
+                                          TextEditingController();
+                                      return AlertDialog(
+                                        title: const Text("Save Custom Preset"),
+                                        content: TextField(
+                                          controller: controller,
+                                          decoration: const InputDecoration(
+                                            labelText: "Preset Name",
+                                          ),
+                                        ),
+                                        actions: [
+                                          TextButton(
+                                            onPressed: () => Navigator.pop(ctx),
+                                            child: const Text("Cancel"),
+                                          ),
+                                          TextButton(
+                                            onPressed: () {
+                                              if (controller.text.isNotEmpty)
+                                                Navigator.pop(
+                                                  ctx,
+                                                  controller.text,
+                                                );
+                                            },
+                                            child: const Text("Save"),
+                                          ),
+                                        ],
+                                      );
+                                    },
+                                  );
+                                  if (name != null && context.mounted) {
+                                    await context
+                                        .read<CircuitState>()
+                                        .saveCustomPreset(name);
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(content: Text("Saved $name")),
+                                    );
+                                  }
+                                });
+                              },
+                              child: const Row(
+                                children: [
+                                  Icon(Icons.save, color: Colors.black54),
+                                  SizedBox(width: 8),
+                                  Text("Save Current"),
+                                ],
+                              ),
+                            ),
+                          ];
+                        },
+                      ),
+
+                      const SizedBox(width: 8),
+                      // Single Shot Toggle
+                      Row(
+                        children: [
+                          Checkbox(
+                            value: _singleShot,
+                            onChanged: (v) =>
+                                setState(() => _singleShot = v ?? false),
+                            fillColor: MaterialStateProperty.all(
+                              const Color(0xFF03DAC6),
+                            ),
+                          ),
+                          const Text(
+                            "Single Shot",
+                            style: TextStyle(fontSize: 12),
+                          ),
+                        ],
+                      ),
                       const Spacer(),
                       // On Mobile, this header helps. On Desktop, it's implied.
                       const Text(
@@ -142,7 +279,10 @@ class HomeScreen extends StatelessWidget {
                 final state = context.read<CircuitState>();
                 state.setLoading(true);
                 try {
-                  final results = await api.runSimulation(state);
+                  final results = await api.runSimulation(
+                    state,
+                    shots: _singleShot ? 1 : 1024,
+                  );
                   state.setResults(results);
                 } catch (e) {
                   state.setError(e.toString());
@@ -172,6 +312,7 @@ class HomeScreen extends StatelessWidget {
               context.read<CircuitState>().clear();
             },
           ),
+          // Presets Menu REMOVED
         ],
       );
     }
