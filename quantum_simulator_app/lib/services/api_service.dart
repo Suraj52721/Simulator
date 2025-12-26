@@ -6,7 +6,8 @@ import 'package:flutter/foundation.dart';
 
 class ApiService {
   // TODO: Replace with your actual deployed backend URL after deploying to Render/Heroku
-  static const String _productionUrl = 'https://your-app-name.onrender.com';
+  static const String _productionUrl =
+      'https://quantum-simulator-backend-5thc.onrender.com';
   static const String _localUrl = 'http://127.0.0.1:5000';
 
   static String get baseUrl => kReleaseMode ? _productionUrl : _localUrl;
@@ -39,6 +40,25 @@ class ApiService {
       }
     } catch (e) {
       throw Exception('Failed to connect to backend: $e');
+    }
+  }
+
+  Future<String> generateQasm(String prompt, int numQubits) async {
+    try {
+      final response = await http.post(
+        Uri.parse('$baseUrl/generate_qasm'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'prompt': prompt, 'num_qubits': numQubits}),
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return data['qasm'] as String;
+      } else {
+        throw Exception('Generative fail: ${response.body}');
+      }
+    } catch (e) {
+      throw Exception('AI Error: $e');
     }
   }
 }

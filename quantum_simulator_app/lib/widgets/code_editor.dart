@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../models/circuit.dart';
+import 'ai_prompt_field.dart';
 
 class CodeEditor extends StatefulWidget {
-  const CodeEditor({super.key});
+  final VoidCallback? onRun;
+  const CodeEditor({super.key, this.onRun});
 
   @override
   State<CodeEditor> createState() => _CodeEditorState();
@@ -100,6 +102,59 @@ class _CodeEditorState extends State<CodeEditor> {
               ),
             ),
           ),
+        ),
+        // Run Button Row
+        if (widget.onRun != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 8.0, right: 16.0),
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: ElevatedButton.icon(
+                onPressed: widget.onRun,
+                icon: const Icon(Icons.play_arrow),
+                label: const Text(
+                  "RUN",
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF03DAC6).withOpacity(0.3),
+                  foregroundColor: const Color(0xFF03DAC6),
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    side: const BorderSide(color: Color(0xFF03DAC6), width: 2),
+                  ),
+                  minimumSize: const Size(100, 48), // Match FAB standard height
+                ),
+              ),
+            ),
+          ),
+        AIPromptField(
+          onCodeGenerated: (qasm) {
+            // 1. Update text editor immediately
+            setState(() {
+              _controller.text = qasm;
+            });
+            // 2. Parse and Apply to Circuit
+            final circuit = context.read<CircuitState>();
+            circuit.fromText(qasm);
+
+            // 3. Feedback
+            if (circuit.error != null) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text("Applied with warning: ${circuit.error}"),
+                  backgroundColor: Colors.orange,
+                ),
+              );
+            } else {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text("AI Circuit Applied Successfully!"),
+                ),
+              );
+            }
+          },
         ),
       ],
     );

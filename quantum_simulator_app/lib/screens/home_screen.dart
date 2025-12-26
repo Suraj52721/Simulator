@@ -17,8 +17,28 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen>
+    with SingleTickerProviderStateMixin {
   bool _singleShot = false;
+  double _visualPanelRatio = 0.6; // Initial ratio (3/5)
+  late TabController _tabController;
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: 2, vsync: this);
+    _tabController.addListener(() {
+      if (_tabController.indexIsChanging) setState(() {});
+      // Also update on animation end for smoother transitions if needed
+      setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -270,30 +290,41 @@ class _HomeScreenState extends State<HomeScreen> {
       );
     }
 
+    // Run Simulation Logic
+    Future<void> runSimulation() async {
+      if (circuit.isLoading) return;
+      final state = context.read<CircuitState>();
+      state.setLoading(true);
+      try {
+        final results = await api.runSimulation(
+          state,
+          shots: _singleShot ? 1 : 1024,
+        );
+        state.setResults(results);
+      } catch (e) {
+        state.setError(e.toString());
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text("Error: $e")));
+      }
+    }
+
     // Shared FAB
     FloatingActionButton buildFab() {
+      // Logic duplicated or reused? Reuse runSimulation
       return FloatingActionButton.extended(
         onPressed: circuit.isLoading
             ? null
-            : () async {
-                final state = context.read<CircuitState>();
-                state.setLoading(true);
-                try {
-                  final results = await api.runSimulation(
-                    state,
-                    shots: _singleShot ? 1 : 1024,
-                  );
-                  state.setResults(results);
-                } catch (e) {
-                  state.setError(e.toString());
-                  ScaffoldMessenger.of(
-                    context,
-                  ).showSnackBar(SnackBar(content: Text("Error: $e")));
-                }
-              },
+            : runSimulation, // Use shared function
         icon: const Icon(Icons.play_arrow),
-        label: const Text("RUN"),
-        backgroundColor: const Color(0xFF03DAC6),
+        label: const Text("RUN", style: TextStyle(fontWeight: FontWeight.bold)),
+        backgroundColor: const Color(0xFF03DAC6).withOpacity(0.3),
+        foregroundColor: const Color(0xFF03DAC6),
+        elevation: 0,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: const BorderSide(color: Color(0xFF03DAC6), width: 2),
+        ),
       );
     }
 
@@ -324,33 +355,81 @@ class _HomeScreenState extends State<HomeScreen> {
           // --- DESKTOP / WIDE: Split View ---
           return Scaffold(
             appBar: buildAppBar(),
-            body: Row(
-              children: [
-                Expanded(flex: 3, child: buildVisualEditor()),
-                VerticalDivider(width: 1, color: Colors.white.withOpacity(0.1)),
-                const Expanded(flex: 2, child: CodeEditor()),
-              ],
+            body: LayoutBuilder(
+              builder: (context, constraints) {
+                final width = constraints.maxWidth;
+                final visualWidth = width * _visualPanelRatio;
+
+                return Row(
+                  children: [
+                    SizedBox(width: visualWidth, child: buildVisualEditor()),
+                    // Resizable Divider
+                    GestureDetector(
+                      onHorizontalDragUpdate: (details) {
+                        setState(() {
+                          // Update ratio based on delta
+                          // Clamp between 0.3 and 0.7 to avoid breaking UI
+                          final newRatio =
+                              _visualPanelRatio + (details.delta.dx / width);
+                          if (newRatio > 0.3 && newRatio < 0.7) {
+                            _visualPanelRatio = newRatio;
+                          }
+                        });
+                      },
+                      child: MouseRegion(
+                        cursor: SystemMouseCursors.resizeColumn,
+                        child: Container(
+                          width: 16,
+                          color: Colors.transparent, // transparent touch area
+                          child: Center(
+                            child: Container(
+                              width: 1,
+                              color: Colors.white.withOpacity(0.1),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+
+                    Expanded(
+                      child: CodeEditor(
+                        onRun: circuit.isLoading ? null : runSimulation,
+                      ),
+                    ),
+                  ],
+                );
+              },
             ),
-            floatingActionButton: buildFab(),
           );
         } else {
           // --- MOBILE / NARROW: Tab View ---
-          return DefaultTabController(
-            length: 2,
-            child: Scaffold(
-              appBar: buildAppBar(
-                bottom: const TabBar(
-                  tabs: [
-                    Tab(icon: Icon(Icons.grid_on), text: "Visual"),
-                    Tab(icon: Icon(Icons.code), text: "Code"),
-                  ],
-                ),
+          // --- MOBILE / NARROW: Tab View ---
+          return Scaffold(
+            appBar: buildAppBar(
+              bottom: TabBar(
+                controller: _tabController,
+                tabs: const [
+                  Tab(icon: Icon(Icons.grid_on), text: "Visual"),
+                  Tab(icon: Icon(Icons.code), text: "Code"),
+                ],
               ),
-              body: TabBarView(
-                children: [buildVisualEditor(), const CodeEditor()],
-              ),
-              floatingActionButton: buildFab(),
             ),
+            body: TabBarView(
+              controller: _tabController,
+              children: [
+                buildVisualEditor(),
+                // Pass null to onRun so the internal button is hidden on mobile
+                const CodeEditor(onRun: null),
+              ],
+            ),
+            floatingActionButton: Padding(
+              // Shift up if on Code tab (index 1) to avoid overlapping prompt box
+              padding: EdgeInsets.only(
+                bottom: _tabController.index == 1 ? 80.0 : 0.0,
+              ),
+              child: buildFab(),
+            ),
+            floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
           );
         }
       },

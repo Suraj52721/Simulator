@@ -9,6 +9,12 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import quantum_lib
 import numpy as np
+import quantum_lib
+import numpy as np
+from google import genai
+from dotenv import load_dotenv
+
+load_dotenv(override=True) # Load environment variables from .env file, overriding system envs
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
@@ -126,6 +132,52 @@ def simulate():
 
     except Exception as e:
         logger.exception("Global server error")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/generate_qasm', methods=['POST'])
+def generate_qasm():
+    try:
+        data = request.get_json()
+        if not data or 'prompt' not in data:
+            return jsonify({"error": "Missing prompt"}), 400
+        
+        prompt = data['prompt']
+        num_qubits = data.get('num_qubits', 5) 
+
+        api_key = os.environ.get("GEMINI_API_KEY")
+        if not api_key:
+             return jsonify({"error": "GEMINI_API_KEY not set on server"}), 500
+
+        client = genai.Client(api_key=api_key)
+        
+        system_prompt = (
+            "You are a quantum computing expert. Translate the following natural language request "
+            "into OpenQASM 2.0 compatible simplified instructions for this specific simulator. "
+            f"You MUST use ONLY the available {num_qubits} qubits, indexed from 0 to {num_qubits-1}. "
+            "Do NOT use qubits outside this range. "
+            "Supported gates: H <q>, X <q>, Y <q>, Z <q>, CX <c> <t>, CZ <c> <t>, SWAP <q1> <q2>, "
+            "RX <q> <theta>, RY <q> <theta>, RZ <q> <theta>, PHASE <q> <theta>. "
+            "Return ONLY the code commands separated by newlines. No markdown, no explanations. "
+            "Example output:\nH 0\nCX 0 1"
+        )
+        
+        response = client.models.generate_content(
+            model='gemini-2.5-flash', 
+            contents=f"{system_prompt}\n\nRequest: {prompt}"
+        )
+        
+        qasm_code = response.text.strip()
+        
+        if qasm_code.startswith("```"):
+            lines = qasm_code.splitlines()
+            if lines[0].startswith("```"): lines = lines[1:]
+            if lines and lines[-1].startswith("```"): lines = lines[:-1]
+            qasm_code = "\n".join(lines)
+
+        return jsonify({"qasm": qasm_code})
+
+    except Exception as e:
+        logger.exception("Gemini generation error")
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
