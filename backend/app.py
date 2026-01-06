@@ -14,7 +14,7 @@ import numpy as np
 from google import genai
 from dotenv import load_dotenv
 
-load_dotenv(override=False) # Load environment variables from .env file, overriding system envs
+load_dotenv() # Load environment variables from .env file, overriding system envs
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
